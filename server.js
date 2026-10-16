@@ -443,6 +443,7 @@ function adminAuth(req, res, next) {
 get('/healthz', (req, res) => res.json({ ok: true }));
 get('/api/config', (req, res) => res.json({
   appName: APP_NAME, emergencyNumber: EMERGENCY_NUMBER, vapidPublicKey: db.vapid.publicKey, pushAvailable: !!webpush,
+  otpAvailable: smsConfigured(),
 }));
 get('/manifest.webmanifest', (req, res) => {
   res.setHeader('Content-Type', 'application/manifest+json');
@@ -496,6 +497,57 @@ post('/api/login', (req, res) => {
   const r = checkPin(u, req.body.pin || '');
   if (r === 'locked') return bad(res, 'Too many wrong PINs. Try again in 15 minutes.', 429);
   if (r !== 'ok') return bad(res, 'Wrong phone number or PIN', 401);
+  res.json({ token: issueToken(u), me: publicUser(u) });
+});
+/* ---- forgot PIN: a 6-digit code is sent by SMS, then she picks a new PIN */
+const otps = new Map(); // phone -> { hash, exp, tries, sentAt } (memory only, never saved to disk)
+const OTP_TTL_MS = 10 * 60000;
+const smsConfigured = () => !!(process.env.TWILIO_SID && process.env.TWILIO_TOKEN && process.env.TWILIO_FROM);
+async function sendSms(phone, text) {
+  const sid = process.env.TWILIO_SID, tok = process.env.TWILIO_TOKEN, from = process.env.TWILIO_FROM;
+  const base = process.env.SMS_API_BASE || 'https://api.twilio.com'; // override only for tests
+  const r = await fetch(`${base}/2010-04-01/Accounts/${sid}/Messages.json`, {
+    method: 'POST',
+    headers: { Authorization: 'Basic ' + Buffer.from(sid + ':' + tok).toString('base64') },
+    body: new URLSearchParams({ To: '+' + phone, From: from, Body: text }),
+  });
+  if (!r.ok) throw new Error('sms status ' + r.status);
+}
+const otpHash = (phone, code) => crypto.createHash('sha256').update(phone + ':' + code + ':' + (db.vapid.publicKey || '')).digest('hex');
+post('/api/pin/forgot', async (req, res) => {
+  if (!smsConfigured()) return bad(res, 'PIN reset by SMS is not switched on yet. Please contact the ' + APP_NAME + ' team.', 503);
+  if (!limit('otpip:' + req.ip, 20, 3600e3)) return bad(res, 'Too many attempts. Try again later.', 429);
+  const phone = normPhone((req.body || {}).phone);
+  if (!phone) return bad(res, 'Enter a valid phone number');
+  const same = { ok: true, message: 'If this number is registered, a 6-digit code has been sent by SMS.' };
+  const u = db.users[byPhone.get(phone)];
+  if (!u || u.status === 'banned') return res.json(same); // do not reveal who is registered
+  const old = otps.get(phone);
+  if (old && Date.now() - old.sentAt < 60000) return bad(res, 'Please wait a minute before asking for another code.', 429);
+  if (!limit('otpph:' + phone, 5, 3600e3)) return bad(res, 'Too many codes requested for this number. Try again in an hour.', 429);
+  const code = String(crypto.randomInt(0, 1000000)).padStart(6, '0');
+  otps.set(phone, { hash: otpHash(phone, code), exp: Date.now() + OTP_TTL_MS, tries: 0, sentAt: Date.now() });
+  try { await sendSms(phone, `${code} is your ${APP_NAME} code to reset your PIN. It works for 10 minutes. Never share it with anyone.`); }
+  catch (e) { otps.delete(phone); console.error('otp sms error', e.message); return bad(res, 'Could not send the SMS. Please try again.', 502); }
+  res.json(same);
+});
+post('/api/pin/reset', (req, res) => {
+  if (!limit('otpreset:' + req.ip, 30, 3600e3)) return bad(res, 'Too many attempts. Try again later.', 429);
+  const b = req.body || {};
+  const phone = normPhone(b.phone);
+  const code = String(b.code || '').trim(), pin = String(b.pin || '');
+  if (!/^\d{4,6}$/.test(pin)) return bad(res, 'PIN must be 4 to 6 digits');
+  const o = phone && otps.get(phone);
+  const u = phone && db.users[byPhone.get(phone)];
+  if (!o || !u || u.status === 'banned' || o.exp < Date.now()) return bad(res, 'The code is wrong or has expired. Ask for a new one.', 400);
+  if (++o.tries > 5) { otps.delete(phone); return bad(res, 'Too many wrong codes. Ask for a new one.', 429); }
+  const a = Buffer.from(otpHash(phone, code), 'hex'), c = Buffer.from(o.hash, 'hex');
+  if (!/^\d{6}$/.test(code) || !crypto.timingSafeEqual(a, c)) return bad(res, 'The code is wrong or has expired. Ask for a new one.', 400);
+  otps.delete(phone);
+  u.pinSalt = rid(8); u.pinHash = hashPin(pin, u.pinSalt);
+  u.pinFails = 0; u.lockedUntil = 0;
+  u.tokens = []; u.pushSubs = []; live.delete(u.id); // sign her out of every other device
+  reindex(); save();
   res.json({ token: issueToken(u), me: publicUser(u) });
 });
 post('/api/logout', auth, (req, res) => {
