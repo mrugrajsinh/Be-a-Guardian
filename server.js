@@ -679,6 +679,22 @@ post('/api/admin/users/:id/:action', adminAuth, (req, res) => {
   const u = db.users[req.params.id];
   if (!u) return bad(res, 'Not found', 404);
   const act = req.params.action;
+  if (act === 'delete') { // permanent: removes the account, frees the phone number, erases her alerts
+    for (const a of Object.values(db.alerts)) {
+      if (a.userId === u.id) { endAlert(a, 'account deleted'); delete db.alerts[a.id]; }
+      else { a.notified = a.notified.filter((x) => x !== u.id); delete a.responses[u.id]; }
+    }
+    live.delete(u.id);
+    delete db.users[u.id];
+    reindex(); save(); return res.json({ ok: true });
+  }
+  if (act === 'setpin') { // admin gives a temporary PIN (for someone who lost theirs)
+    const pin = String((req.body || {}).pin || '');
+    if (!/^\d{4,6}$/.test(pin)) return bad(res, 'PIN must be 4 to 6 digits');
+    u.pinSalt = rid(8); u.pinHash = hashPin(pin, u.pinSalt);
+    u.pinFails = 0; u.lockedUntil = 0; u.tokens = []; u.pushSubs = []; live.delete(u.id);
+    reindex(); save(); return res.json({ ok: true });
+  }
   if (act === 'approve' && u.role === 'helper') u.status = 'approved';
   else if (act === 'reject' && u.role === 'helper') { u.status = 'rejected'; u.onDuty = false; live.delete(u.id); }
   else if (act === 'ban') { u.status = 'banned'; u.onDuty = false; live.delete(u.id); }

@@ -5,8 +5,8 @@ const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&':
 let key = sessionStorage.getItem('adminKey') || '';
 let tab = 'pending', data = null;
 
-async function call(path, method = 'GET') {
-  const res = await fetch(path, { method, headers: { 'x-admin-key': key, 'Content-Type': 'application/json' }, body: method === 'POST' ? '{}' : undefined });
+async function call(path, method = 'GET', body) {
+  const res = await fetch(path, { method, headers: { 'x-admin-key': key, 'Content-Type': 'application/json' }, body: method === 'POST' ? JSON.stringify(body || {}) : undefined });
   const j = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(j.error || 'Error');
   return j;
@@ -26,6 +26,9 @@ async function load() {
     $('#err').hidden = false; $('#err').textContent = e.message;
   }
 }
+const extraBtns = (u) =>
+  '<button class="btn small" data-do="setpin" data-id="' + esc(u.id) + '" data-name="' + esc(u.name) + '">Set new PIN</button>' +
+  '<button class="btn small" data-do="delete" data-id="' + esc(u.id) + '" data-name="' + esc(u.name) + '">Delete</button>';
 function helperRows(list) {
   if (!list.length) return '<p>Nothing here.</p>';
   return '<table><tr><th>Name</th><th>Phone</th><th>ID (last 4)</th><th>Why / where</th><th>Status</th><th>Applied</th><th></th></tr>' +
@@ -34,7 +37,7 @@ function helperRows(list) {
       (h.status !== 'approved' && h.status !== 'banned' ? '<button class="btn small primary" data-do="approve" data-id="' + esc(h.id) + '">Approve</button>' : '') +
       (h.status === 'pending' ? '<button class="btn small" data-do="reject" data-id="' + esc(h.id) + '">Reject</button>' : '') +
       (h.status !== 'banned' ? '<button class="btn small" data-do="ban" data-id="' + esc(h.id) + '">Ban</button>' : '<button class="btn small" data-do="unban" data-id="' + esc(h.id) + '">Unban</button>') +
-      '</td></tr>').join('') + '</table>';
+      extraBtns(h) + '</td></tr>').join('') + '</table>';
 }
 function draw() {
   document.querySelectorAll('.tabs [data-tab]').forEach((b) => b.classList.toggle('on', b.dataset.tab === tab));
@@ -44,7 +47,7 @@ function draw() {
   else if (tab === 'women') {
     html = data.women.length ? '<table><tr><th>Name</th><th>Phone</th><th>Status</th><th>Strikes</th><th>Joined</th><th></th></tr>' +
       data.women.map((w) => '<tr><td>' + esc(w.name) + '</td><td>+' + esc(w.phone) + '</td><td>' + esc(w.status) + '</td><td>' + w.strikes + '</td><td>' + esc(when(w.createdAt)) + '</td><td>' +
-        (w.status === 'banned' ? '<button class="btn small" data-do="unban" data-id="' + esc(w.id) + '">Unban</button>' : '<button class="btn small" data-do="ban" data-id="' + esc(w.id) + '">Ban</button>') + '</td></tr>').join('') + '</table>' : '<p>Nothing here.</p>';
+        (w.status === 'banned' ? '<button class="btn small" data-do="unban" data-id="' + esc(w.id) + '">Unban</button>' : '<button class="btn small" data-do="ban" data-id="' + esc(w.id) + '">Ban</button>') + extraBtns(w) + '</td></tr>').join('') + '</table>' : '<p>Nothing here.</p>';
   } else {
     html = data.alerts.length ? '<table><tr><th>When</th><th>Who</th><th>Status</th><th>Helpers alerted</th><th>Responded</th><th></th></tr>' +
       data.alerts.map((a) => '<tr><td>' + esc(when(a.createdAt)) + '</td><td>' + esc(a.user) + '<br><small>+' + esc(a.phone) + '</small></td><td>' + esc(a.status) + (a.endReason ? ' (' + esc(a.endReason) + ')' : '') + '</td><td>' + a.notified + '</td><td>' + a.coming + '</td><td>' +
@@ -61,7 +64,17 @@ document.addEventListener('click', async (e) => {
   const d = e.target.closest('[data-do]');
   if (d) {
     if (d.dataset.do === 'ban' && !confirm('Ban this user?')) return;
-    try { await call('/api/admin/users/' + encodeURIComponent(d.dataset.id) + '/' + d.dataset.do, 'POST'); await load(); } catch (err) { alert(err.message); }
+    let body;
+    if (d.dataset.do === 'delete') {
+      if (!confirm('PERMANENTLY delete ' + d.dataset.name + '? This removes the account and any alerts, and cannot be undone.')) return;
+      if (!confirm('Last check: really delete ' + d.dataset.name + '?')) return;
+    }
+    if (d.dataset.do === 'setpin') {
+      const pin = prompt('Type a temporary 4 to 6 digit PIN for ' + d.dataset.name + '. Tell them to use it to log in. They are signed out of other devices.');
+      if (pin === null) return;
+      body = { pin: pin.trim() };
+    }
+    try { await call('/api/admin/users/' + encodeURIComponent(d.dataset.id) + '/' + d.dataset.do, 'POST', body); await load(); if (d.dataset.do === 'setpin') alert('PIN changed.'); } catch (err) { alert(err.message); }
   }
   const a = e.target.closest('[data-alert]');
   if (a) {
