@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <link rel="stylesheet" href="/style.css">
+  <title>Admin</title>
+  <style>
+    main.wide { max-width: 900px; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; background: #fff; border-radius: 12px; overflow: hidden; }
+    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+    th { background: #f6eef0; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+    td .btn.small { margin: 2px 2px 2px 0; padding: 6px 10px; font-size: 13px; }
+    .tabs { display: flex; gap: 8px; margin: 12px 0; flex-wrap: wrap; }
+    .tabs button.on { background: var(--brand); color: #fff; border-color: var(--brand); }
+    .scroll { overflow-x: auto; }
+  </style>
+</head>
+<body>
+  <main class="wide">
+    <h1>Admin</h1>
+    <div id="login">
+      <p>Enter the admin key (set as ADMIN_KEY on your server).</p>
+      <input id="key" type="password" autocomplete="off" placeholder="Admin key">
+      <button class="btn primary" id="go">Open</button>
+      <p class="err" id="err" hidden></p>
+    </div>
+    <div id="panel" hidden>
+      <p id="summary" class="small"></p>
+      <div class="tabs">
+        <button class="btn small on" data-tab="pending">Helpers to review</button>
+        <button class="btn small" data-tab="helpers">All helpers</button>
+        <button class="btn small" data-tab="alerts">Recent alerts</button>
+        <button class="btn small" data-tab="women">Safety-button users</button>
+        <button class="btn small" data-tab="reports" id="reportsTab">Reports</button>
+        <button class="btn small" id="reload">Refresh</button>
+      </div>
+      <div class="scroll" id="table"></div>
+    </div>
+  </main>
+  <script src="/admin.js"></script>
+</body>
+</html>
